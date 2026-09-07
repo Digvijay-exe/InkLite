@@ -27,9 +27,18 @@ enum class InkTool {
     PAN_ZOOM
 }
 
+enum class EraserMode(val title: String, val description: String) {
+    STROKE("Stroke Eraser", "Removes entire stroke on contact"),
+    PRECISION("Precision Eraser", "Erases within the brush radius")
+}
+
 sealed class UndoAction {
     data class AddStroke(val stroke: InkStroke) : UndoAction()
     data class DeleteStroke(val stroke: InkStroke, val index: Int) : UndoAction()
+    data class EraseSession(
+        val removed: List<Pair<Int, InkStroke>>,
+        val added: List<Pair<Int, InkStroke>> = emptyList()
+    ) : UndoAction()
     data class ClearAll(val strokes: List<InkStroke>) : UndoAction()
 }
 
@@ -56,6 +65,18 @@ class InkCanvasView @JvmOverloads constructor(
     var currentTool: InkTool = InkTool.PEN
     var currentColor: Int = 0xFFD0BCFF.toInt() // Lavender Glow
     var currentStrokeWidth: Float = 5f
+    var eraserMode: EraserMode = EraserMode.STROKE
+    var eraserRadius: Float = 32f
+
+    // Active Eraser State
+    private var isErasing = false
+    private var eraserTouchX: Float? = null
+    private var eraserTouchY: Float? = null
+    private var lastEraserPx = 0f
+    private var lastEraserPy = 0f
+    private val currentEraseRemoved = mutableListOf<Pair<Int, InkStroke>>()
+    private val currentEraseAdded = mutableListOf<Pair<Int, InkStroke>>()
+
     var currentTemplate: PageTemplate = PageTemplate.LINED
         set(value) {
             field = value
@@ -129,8 +150,19 @@ class InkCanvasView @JvmOverloads constructor(
         style = Paint.Style.FILL
         isAntiAlias = true
     }
-    private val eraserIndicatorPaint = Paint().apply {
-        color = 0x44FFB4AB.toInt() // Soft coral eraser circle
+    private val eraserReticleFillPaint = Paint().apply {
+        color = 0x2EFF897D.toInt() // Translucent coral reticle fill
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val eraserReticleStrokePaint = Paint().apply {
+        color = 0xCCFF897D.toInt() // Coral reticle outline
+        strokeWidth = 2.5f
+        style = Paint.Style.STROKE
+        isAntiAlias = true
+    }
+    private val eraserReticleDotPaint = Paint().apply {
+        color = 0xFFFF897D.toInt()
         style = Paint.Style.FILL
         isAntiAlias = true
     }
@@ -209,6 +241,19 @@ class InkCanvasView @JvmOverloads constructor(
                 strokes.add(insertIdx, action.stroke)
                 redoStack.addLast(action)
             }
+            is UndoAction.EraseSession -> {
+                // Undo: Remove newly added sub-strokes
+                for ((_, added) in action.added.reversed()) {
+                    strokes.remove(added)
+                }
+                // Re-insert original removed strokes at their respective indices
+                val sortedRemoved = action.removed.sortedBy { it.first }
+                for ((idx, stroke) in sortedRemoved) {
+                    val insertIdx = idx.coerceIn(0, strokes.size)
+                    strokes.add(insertIdx, stroke)
+                }
+                redoStack.addLast(action)
+            }
             is UndoAction.ClearAll -> {
                 strokes.addAll(action.strokes)
                 redoStack.addLast(action)
@@ -228,6 +273,19 @@ class InkCanvasView @JvmOverloads constructor(
             }
             is UndoAction.DeleteStroke -> {
                 strokes.remove(action.stroke)
+                undoStack.addLast(action)
+            }
+            is UndoAction.EraseSession -> {
+                // Redo: Remove restored strokes
+                for ((_, stroke) in action.removed) {
+                    strokes.remove(stroke)
+                }
+                // Re-add sub-strokes
+                val sortedAdded = action.added.sortedBy { it.first }
+                for ((idx, added) in sortedAdded) {
+                    val insertIdx = idx.coerceIn(0, strokes.size)
+                    strokes.add(insertIdx, added)
+                }
                 undoStack.addLast(action)
             }
             is UndoAction.ClearAll -> {
@@ -418,13 +476,159 @@ class InkCanvasView @JvmOverloads constructor(
     }
 
     private fun handleEraserTouch(event: MotionEvent, px: Float, py: Float) {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_MOVE) {
-            // Find strokes intersecting touch point
-            val hitIndex = findStrokeAt(px, py)
-            if (hitIndex != -1) {
-                val removed = strokes.removeAt(hitIndex)
-                pushUndo(UndoAction.DeleteStroke(removed, hitIndex))
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                isErasing = true
+                eraserTouchX = px
+                eraserTouchY = py
+                lastEraserPx = px
+                lastEraserPy = py
+                currentEraseRemoved.clear()
+                currentEraseAdded.clear()
+                eraseAtPoint(px, py)
                 invalidate()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                isErasing = true
+                val historySize = event.historySize
+                for (h in 0 until historySize) {
+                    val hx = (event.getHistoricalX(h) - panX) / scaleFactor
+                    val hy = (event.getHistoricalY(h) - panY) / scaleFactor
+                    eraseAlongSegment(lastEraserPx, lastEraserPy, hx, hy)
+                    lastEraserPx = hx
+                    lastEraserPy = hy
+                }
+                eraseAlongSegment(lastEraserPx, lastEraserPy, px, py)
+                lastEraserPx = px
+                lastEraserPy = py
+                eraserTouchX = px
+                eraserTouchY = py
+                invalidate()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                isErasing = false
+                eraserTouchX = null
+                eraserTouchY = null
+                if (currentEraseRemoved.isNotEmpty() || currentEraseAdded.isNotEmpty()) {
+                    pushUndo(
+                        UndoAction.EraseSession(
+                            removed = ArrayList(currentEraseRemoved),
+                            added = ArrayList(currentEraseAdded)
+                        )
+                    )
+                    currentEraseRemoved.clear()
+                    currentEraseAdded.clear()
+                }
+                notifyStateChanged()
+                invalidate()
+            }
+        }
+    }
+
+    private fun eraseAlongSegment(x1: Float, y1: Float, x2: Float, y2: Float) {
+        val dist = hypot(x2 - x1, y2 - y1)
+        val step = (eraserRadius * 0.4f).coerceAtLeast(8f)
+        val steps = max(1, (dist / step).toInt())
+        for (s in 0..steps) {
+            val t = s.toFloat() / steps
+            val ix = x1 + t * (x2 - x1)
+            val iy = y1 + t * (y2 - y1)
+            eraseAtPoint(ix, iy)
+        }
+    }
+
+    private fun eraseAtPoint(px: Float, py: Float) {
+        if (eraserMode == EraserMode.STROKE) {
+            eraseStrokeAt(px, py)
+        } else {
+            erasePrecisionAt(px, py)
+        }
+    }
+
+    private fun eraseStrokeAt(px: Float, py: Float) {
+        val hitIndex = findStrokeAt(px, py, eraserRadius)
+        if (hitIndex != -1) {
+            val removed = strokes.removeAt(hitIndex)
+            currentEraseRemoved.add(Pair(hitIndex, removed))
+        }
+    }
+
+    private fun erasePrecisionAt(px: Float, py: Float) {
+        val rSq = eraserRadius * eraserRadius
+        // Iterate backwards so removals preserve valid indices
+        for (i in strokes.indices.reversed()) {
+            val stroke = strokes[i]
+            val bounds = stroke.bounds
+            if (px < bounds.left - eraserRadius || px > bounds.right + eraserRadius ||
+                py < bounds.top - eraserRadius || py > bounds.bottom + eraserRadius
+            ) {
+                continue
+            }
+
+            var anyPointInCircle = false
+            for (p in stroke.points) {
+                val dSq = (p.x - px) * (p.x - px) + (p.y - py) * (p.y - py)
+                if (dSq <= rSq) {
+                    anyPointInCircle = true
+                    break
+                }
+            }
+
+            if (!anyPointInCircle) {
+                for (j in 0 until stroke.points.size - 1) {
+                    val p1 = stroke.points[j]
+                    val p2 = stroke.points[j + 1]
+                    if (distSqToSegment(px, py, p1.x, p1.y, p2.x, p2.y) <= rSq) {
+                        anyPointInCircle = true
+                        break
+                    }
+                }
+            }
+
+            if (!anyPointInCircle) continue
+
+            // Split into sub-strokes where points are outside circle
+            val newSubStrokes = mutableListOf<InkStroke>()
+            val curPoints = mutableListOf<InkPoint>()
+
+            for (p in stroke.points) {
+                val dSq = (p.x - px) * (p.x - px) + (p.y - py) * (p.y - py)
+                if (dSq > rSq) {
+                    curPoints.add(p)
+                } else {
+                    if (curPoints.isNotEmpty()) {
+                        newSubStrokes.add(
+                            InkStroke(
+                                points = ArrayList(curPoints),
+                                color = stroke.color,
+                                strokeWidth = stroke.strokeWidth,
+                                isHighlighter = stroke.isHighlighter,
+                                bounds = InkStroke.computeBounds(curPoints, stroke.strokeWidth)
+                            )
+                        )
+                        curPoints.clear()
+                    }
+                }
+            }
+            if (curPoints.isNotEmpty()) {
+                newSubStrokes.add(
+                    InkStroke(
+                        points = ArrayList(curPoints),
+                        color = stroke.color,
+                        strokeWidth = stroke.strokeWidth,
+                        isHighlighter = stroke.isHighlighter,
+                        bounds = InkStroke.computeBounds(curPoints, stroke.strokeWidth)
+                    )
+                )
+            }
+
+            val removed = strokes.removeAt(i)
+            currentEraseRemoved.add(Pair(i, removed))
+            for (subIdx in newSubStrokes.indices) {
+                val insertPos = i + subIdx
+                val sub = newSubStrokes[subIdx]
+                strokes.add(insertPos, sub)
+                currentEraseAdded.add(Pair(insertPos, sub))
             }
         }
     }
@@ -433,9 +637,8 @@ class InkCanvasView @JvmOverloads constructor(
      * Fast distance check for stroke eraser.
      * Uses bounding box pre-filtering followed by segment distance test.
      */
-    private fun findStrokeAt(px: Float, py: Float): Int {
-        val touchTolerance = (24f / scaleFactor).coerceAtLeast(16f)
-        // Check from top to bottom (most recently drawn first)
+    private fun findStrokeAt(px: Float, py: Float, radius: Float): Int {
+        val touchTolerance = (radius / scaleFactor).coerceAtLeast(16f)
         for (i in strokes.indices.reversed()) {
             val stroke = strokes[i]
             val bounds = stroke.bounds
@@ -530,6 +733,15 @@ class InkCanvasView @JvmOverloads constructor(
         // 5. Draw Active Stroke
         if (activePoints.isNotEmpty()) {
             drawActiveStroke(canvas)
+        }
+
+        // 6. Draw Eraser Reticle Indicator
+        if (currentTool == InkTool.ERASER && isErasing && eraserTouchX != null && eraserTouchY != null) {
+            val ex = eraserTouchX!!
+            val ey = eraserTouchY!!
+            canvas.drawCircle(ex, ey, eraserRadius, eraserReticleFillPaint)
+            canvas.drawCircle(ex, ey, eraserRadius, eraserReticleStrokePaint)
+            canvas.drawCircle(ex, ey, 3.5f, eraserReticleDotPaint)
         }
 
         canvas.restore() // Undo clipRect

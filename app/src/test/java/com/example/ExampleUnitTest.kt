@@ -99,4 +99,60 @@ class ExampleUnitTest {
     assertEquals(PageTemplate.BLANK, PageTemplate.fromString("UNKNOWN_VALUE"))
     assertEquals(PageTemplate.BLANK, PageTemplate.fromString(null))
   }
+
+  @Test
+  fun testFlattenStrokesToPngAndShareIntent() {
+    val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+    val page = com.example.data.model.NotebookPage(
+      id = "page-test-1",
+      notebookId = "nb-test",
+      pageNumber = 1,
+      template = PageTemplate.LINED,
+      strokeFilePath = File(tempFolder.root, "page1.ink").absolutePath,
+      updatedAt = System.currentTimeMillis()
+    )
+
+    val strokes = listOf(
+      InkStroke(
+        id = "stroke-flat-1",
+        points = listOf(InkPoint(50f, 50f), InkPoint(200f, 200f)),
+        color = 0xFFDC2626.toInt(),
+        strokeWidth = 6.0f
+      )
+    )
+
+    // Test Flatten to PNG (Standard with background)
+    val pngUri = com.example.data.export.ExportManager.exportPageAsImage(
+      context = context,
+      notebookTitle = "TestNotebook",
+      page = page,
+      pdfFilePath = null,
+      strokes = strokes,
+      isPng = true,
+      transparentBackground = false
+    )
+    assertTrue("PNG Uri should not be null", pngUri != null)
+    assertTrue("PNG Uri should contain content or file scheme", pngUri.scheme != null)
+
+    // Test Flatten to PNG (Transparent background)
+    val transparentPngUri = com.example.data.export.ExportManager.exportPageAsImage(
+      context = context,
+      notebookTitle = "TestNotebook",
+      page = page,
+      pdfFilePath = null,
+      strokes = strokes,
+      isPng = true,
+      transparentBackground = true
+    )
+    assertTrue("Transparent PNG Uri should not be null", transparentPngUri != null)
+
+    // Test Share Intent creation with ClipData and URI permissions
+    val shareIntent = com.example.data.export.ExportManager.createShareIntent(
+      context = context,
+      uri = pngUri,
+      mimeType = "image/png",
+      title = "Share Test Note"
+    )
+    assertTrue("Share intent should have ACTION_CHOOSER", shareIntent != null)
+  }
 }

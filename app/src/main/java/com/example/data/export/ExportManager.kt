@@ -36,22 +36,25 @@ object ExportManager {
         height: Float,
         template: PageTemplate,
         pdfBitmap: Bitmap?,
-        strokes: List<InkStroke>
+        strokes: List<InkStroke>,
+        transparentBackground: Boolean = false
     ) {
-        // 1. Draw page background
-        val bgPaint = Paint().apply {
-            color = if (pdfBitmap != null && !pdfBitmap.isRecycled) Color.WHITE else 0xFF1D1B20.toInt()
-            style = Paint.Style.FILL
-        }
-        canvas.drawRect(0f, 0f, width, height, bgPaint)
+        if (!transparentBackground) {
+            // 1. Draw page background
+            val bgPaint = Paint().apply {
+                color = if (pdfBitmap != null && !pdfBitmap.isRecycled) Color.WHITE else 0xFF1D1B20.toInt()
+                style = Paint.Style.FILL
+            }
+            canvas.drawRect(0f, 0f, width, height, bgPaint)
 
-        // 2. Draw PDF background if available
-        if (pdfBitmap != null && !pdfBitmap.isRecycled) {
-            val destRect = RectF(0f, 0f, width, height)
-            canvas.drawBitmap(pdfBitmap, null, destRect, null)
-        } else {
-            // 3. Draw procedural template (vector lines / grid / dots)
-            drawProceduralTemplate(canvas, width, height, template)
+            // 2. Draw PDF background if available
+            if (pdfBitmap != null && !pdfBitmap.isRecycled) {
+                val destRect = RectF(0f, 0f, width, height)
+                canvas.drawBitmap(pdfBitmap, null, destRect, null)
+            } else {
+                // 3. Draw procedural template (vector lines / grid / dots)
+                drawProceduralTemplate(canvas, width, height, template)
+            }
         }
 
         // 4. Draw vector strokes
@@ -197,6 +200,26 @@ object ExportManager {
         strokes: List<InkStroke>,
         isPng: Boolean = true
     ): Uri {
+        return exportPageAsImage(
+            context = context,
+            notebookTitle = notebookTitle,
+            page = page,
+            pdfFilePath = null,
+            strokes = strokes,
+            isPng = isPng,
+            transparentBackground = false
+        )
+    }
+
+    fun exportPageAsImage(
+        context: Context,
+        notebookTitle: String,
+        page: NotebookPage,
+        pdfFilePath: String?,
+        strokes: List<InkStroke>,
+        isPng: Boolean = true,
+        transparentBackground: Boolean = false
+    ): Uri {
         val bmp = Bitmap.createBitmap(
             PAGE_WIDTH.toInt(),
             PAGE_HEIGHT.toInt(),
@@ -204,12 +227,19 @@ object ExportManager {
         )
         val canvas = Canvas(bmp)
 
-        val pdfBmp = if (page.pdfPageIndex >= 0) {
-            // Check if notebook has pdf
-            PdfPageManager.getPageBitmap(context, page.strokeFilePath, page.pdfPageIndex)
+        val pdfBmp = if (page.pdfPageIndex >= 0 && !pdfFilePath.isNullOrBlank()) {
+            PdfPageManager.getPageBitmap(context, pdfFilePath, page.pdfPageIndex)
         } else null
 
-        renderPageToCanvas(canvas, PAGE_WIDTH, PAGE_HEIGHT, page.template, pdfBmp, strokes)
+        renderPageToCanvas(
+            canvas = canvas,
+            width = PAGE_WIDTH,
+            height = PAGE_HEIGHT,
+            template = page.template,
+            pdfBitmap = pdfBmp,
+            strokes = strokes,
+            transparentBackground = transparentBackground
+        )
 
         val ext = if (isPng) "png" else "jpg"
         val cleanTitle = notebookTitle.replace("[^a-zA-Z0-9]".toRegex(), "_")
@@ -417,15 +447,22 @@ object ExportManager {
         return fileName
     }
 
-    fun shareFile(context: Context, uri: Uri, mimeType: String, title: String) {
-        val intent = Intent(Intent.ACTION_SEND).apply {
+    fun createShareIntent(context: Context, uri: Uri, mimeType: String, title: String): Intent {
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
             type = mimeType
             putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, title)
+            clipData = android.content.ClipData.newUri(context.contentResolver, title, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val chooser = Intent.createChooser(intent, title).apply {
+        return Intent.createChooser(sendIntent, title).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+    }
+
+    fun shareFile(context: Context, uri: Uri, mimeType: String, title: String) {
+        val chooser = createShareIntent(context, uri, mimeType, title)
         context.startActivity(chooser)
     }
 }

@@ -91,8 +91,8 @@ fun InkLiteApp(viewModel: InkLiteViewModel) {
             onUpdateUndoRedoState = { canUndo, canRedo ->
                 viewModel.updateUndoRedoState(canUndo, canRedo)
             },
-            onExportPageAsImage = { strokes, isPng ->
-                viewModel.exportCurrentPageAsImage(strokes, isPng)
+            onExportPageAsImage = { strokes, isPng, transparent ->
+                viewModel.exportCurrentPageAsImage(strokes, isPng, transparent)
             },
             onExportPageAsPdf = { strokes ->
                 viewModel.exportCurrentPageAsPdf(strokes)
@@ -111,6 +111,18 @@ fun InkLiteApp(viewModel: InkLiteViewModel) {
             },
             onWritePagePdfToUri = { uri, strokes ->
                 viewModel.writeCurrentPagePdfToUri(uri, strokes)
+            },
+            onSetEraserMode = { mode ->
+                viewModel.setEraserMode(mode)
+            },
+            onSetEraserRadius = { radius ->
+                viewModel.setEraserRadius(radius)
+            },
+            onRefreshCacheStats = {
+                viewModel.refreshCacheStats()
+            },
+            onClearCacheMemory = {
+                viewModel.clearCacheMemory()
             },
             onClearStatusMessage = {
                 viewModel.clearStatusMessage()

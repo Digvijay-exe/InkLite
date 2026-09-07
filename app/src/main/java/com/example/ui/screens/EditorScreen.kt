@@ -1,9 +1,15 @@
 package com.example.ui.screens
 
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,26 +32,32 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Highlight
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.LineWeight
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PanTool
@@ -62,6 +74,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,6 +86,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -98,6 +114,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.data.model.InkStroke
 import com.example.data.model.PageTemplate
+import com.example.ui.canvas.EraserMode
 import com.example.ui.canvas.InkCanvasView
 import com.example.ui.canvas.InkTool
 import com.example.ui.theme.AccentCoral
@@ -128,13 +145,17 @@ fun EditorScreen(
     onSetColor: (Int) -> Unit,
     onSetStrokeWidth: (Float) -> Unit,
     onUpdateUndoRedoState: (Boolean, Boolean) -> Unit,
-    onExportPageAsImage: (List<InkStroke>, Boolean) -> Unit,
+    onExportPageAsImage: (List<InkStroke>, Boolean, Boolean) -> Unit = { _, _, _ -> },
     onExportPageAsPdf: (List<InkStroke>) -> Unit,
     onExportNotebookAsPdf: (List<InkStroke>) -> Unit,
     onSaveNotebookPdfToDownloads: (List<InkStroke>) -> Unit = {},
     onSavePagePdfToDownloads: (List<InkStroke>) -> Unit = {},
     onWriteNotebookPdfToUri: (Uri, List<InkStroke>) -> Unit = { _, _ -> },
     onWritePagePdfToUri: (Uri, List<InkStroke>) -> Unit = { _, _ -> },
+    onSetEraserMode: (EraserMode) -> Unit = {},
+    onSetEraserRadius: (Float) -> Unit = {},
+    onRefreshCacheStats: () -> Unit = {},
+    onClearCacheMemory: () -> Unit = {},
     onClearStatusMessage: () -> Unit = {},
     onClearShareUri: () -> Unit
 ) {
@@ -147,8 +168,11 @@ fun EditorScreen(
     var showWidthDialog by remember { mutableStateOf(false) }
     var showTemplateDialog by remember { mutableStateOf(false) }
     var showPagesSheet by remember { mutableStateOf(false) }
+    var showShareSheet by remember { mutableStateOf(false) }
+    var transparentPngExport by remember { mutableStateOf(false) }
     var showExportMenu by remember { mutableStateOf(false) }
     var showClearPageConfirm by remember { mutableStateOf(false) }
+    var showCacheDialog by remember { mutableStateOf(false) }
     var pendingSaveTarget by remember { mutableStateOf<String?>(null) } // "notebook" or "page"
 
     // SAF Document Creator for saving PDF to custom user location
@@ -177,12 +201,20 @@ fun EditorScreen(
     // Dispatch system share sheet when export completes
     LaunchedEffect(state.exportShareUri) {
         state.exportShareUri?.let { uri ->
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = state.exportShareMime ?: "*/*"
+            val title = state.currentNotebook?.title ?: "InkLite Document"
+            val mime = state.exportShareMime ?: "*/*"
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = mime
                 putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                clipData = ClipData.newUri(context.contentResolver, title, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Share Note"))
+            val chooser = Intent.createChooser(sendIntent, "Share ${if (mime == "application/pdf") "PDF" else "Image"}").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(chooser)
             onClearShareUri()
         }
     }
@@ -285,6 +317,21 @@ fun EditorScreen(
                         )
                     }
 
+                    // Flatten & Share Button
+                    IconButton(
+                        onClick = { showShareSheet = true },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .testTag("share_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = "Flatten & Share",
+                            tint = AccentLavender
+                        )
+                    }
+
                     // More Options / Export Menu
                     Box {
                         IconButton(
@@ -305,6 +352,21 @@ fun EditorScreen(
                             onDismissRequest = { showExportMenu = false },
                             modifier = Modifier.background(DarkSurfaceContainer)
                         ) {
+                            // 0. Flatten & Share Dialog
+                            DropdownMenuItem(
+                                text = { Text("Flatten & Share (PDF / PNG)...", color = DarkTextPrimary, fontWeight = FontWeight.SemiBold) },
+                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = AccentLavender) },
+                                onClick = {
+                                    showExportMenu = false
+                                    showShareSheet = true
+                                }
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = DarkBorder.copy(alpha = 0.4f)
+                            )
+
                             // 1. Save Notebook as PDF (Offline direct save)
                             DropdownMenuItem(
                                 text = { Text("Save Notebook to Downloads (PDF)", color = DarkTextPrimary, fontWeight = FontWeight.SemiBold) },
@@ -389,7 +451,7 @@ fun EditorScreen(
                                 onClick = {
                                     showExportMenu = false
                                     val strokes = canvasViewRef?.getStrokes() ?: state.currentPageStrokes
-                                    onExportPageAsImage(strokes, true)
+                                    onExportPageAsImage(strokes, true, false)
                                 }
                             )
                             DropdownMenuItem(
@@ -398,7 +460,35 @@ fun EditorScreen(
                                 onClick = {
                                     showExportMenu = false
                                     val strokes = canvasViewRef?.getStrokes() ?: state.currentPageStrokes
-                                    onExportPageAsImage(strokes, false)
+                                    onExportPageAsImage(strokes, false, false)
+                                }
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = DarkBorder.copy(alpha = 0.4f)
+                            )
+
+                            // 7. Cache Memory Manager
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text("Cache Memory Manager", color = DarkTextPrimary)
+                                        val stats = state.cacheStats
+                                        if (stats != null) {
+                                            Text(
+                                                text = "${stats.formatBitmapSize()} in RAM • ${stats.hitRatePercentage}% hits",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = AccentIceBlue
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.Memory, contentDescription = null, tint = AccentIceBlue) },
+                                onClick = {
+                                    showExportMenu = false
+                                    onRefreshCacheStats()
+                                    showCacheDialog = true
                                 }
                             )
                         }
@@ -754,6 +844,164 @@ fun EditorScreen(
                 }
             }
 
+            // Eraser Tool Specific Options Bar (Mode & Precision / Size)
+            AnimatedVisibility(
+                visible = state.selectedTool == InkTool.ERASER,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 2.dp)
+                        .testTag("eraser_options_bar"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = DarkSurfaceContainer,
+                    border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.4f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CleaningServices,
+                            contentDescription = null,
+                            tint = AccentCoral,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Eraser:",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = DarkTextPrimary
+                            )
+                        )
+
+                        // Mode 1: Stroke Eraser
+                        FilterChip(
+                            selected = state.selectedEraserMode == EraserMode.STROKE,
+                            onClick = {
+                                onSetEraserMode(EraserMode.STROKE)
+                                canvasViewRef?.eraserMode = EraserMode.STROKE
+                            },
+                            label = { Text("Stroke") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.AutoFixNormal,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AccentCoral.copy(alpha = 0.2f),
+                                selectedLabelColor = AccentCoral,
+                                selectedLeadingIconColor = AccentCoral,
+                                containerColor = Color.Transparent,
+                                labelColor = DarkTextSecondary
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (state.selectedEraserMode == EraserMode.STROKE) AccentCoral else DarkBorder.copy(alpha = 0.5f)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("eraser_mode_stroke")
+                        )
+
+                        // Mode 2: Precision Eraser
+                        FilterChip(
+                            selected = state.selectedEraserMode == EraserMode.PRECISION,
+                            onClick = {
+                                onSetEraserMode(EraserMode.PRECISION)
+                                canvasViewRef?.eraserMode = EraserMode.PRECISION
+                            },
+                            label = { Text("Precision") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCut,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AccentCoral.copy(alpha = 0.2f),
+                                selectedLabelColor = AccentCoral,
+                                selectedLeadingIconColor = AccentCoral,
+                                containerColor = Color.Transparent,
+                                labelColor = DarkTextSecondary
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (state.selectedEraserMode == EraserMode.PRECISION) AccentCoral else DarkBorder.copy(alpha = 0.5f)
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("eraser_mode_precision")
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(20.dp)
+                                .background(DarkBorder)
+                        )
+
+                        Text(
+                            text = "Size:",
+                            style = MaterialTheme.typography.labelSmall.copy(color = DarkTextSecondary)
+                        )
+
+                        // Size Options: 16f, 32f, 56f, 80f
+                        val sizes = listOf(
+                            16f to "Fine",
+                            32f to "Medium",
+                            56f to "Large",
+                            80f to "Broad"
+                        )
+                        sizes.forEach { (r, label) ->
+                            val isSelected = (state.selectedEraserRadius == r)
+                            Surface(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        onSetEraserRadius(r)
+                                        canvasViewRef?.eraserRadius = r
+                                    }
+                                    .testTag("eraser_size_${label.lowercase()}"),
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSelected) AccentCoral.copy(alpha = 0.2f) else Color.Transparent,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isSelected) AccentCoral else DarkBorder.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size((r / 8f).coerceIn(4f, 12f).dp)
+                                            .clip(CircleShape)
+                                            .background(if (isSelected) AccentCoral else DarkTextSecondary)
+                                    )
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = if (isSelected) AccentCoral else DarkTextSecondary,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Sophisticated Dark Canvas: flex-1 relative m-4 mt-3 bg-[#1D1B20] rounded-2xl border border-[#49454F]/50
             Box(
                 modifier = Modifier
@@ -772,6 +1020,8 @@ fun EditorScreen(
                             currentTool = state.selectedTool
                             currentColor = state.selectedColor
                             currentStrokeWidth = state.selectedStrokeWidth
+                            eraserMode = state.selectedEraserMode
+                            eraserRadius = state.selectedEraserRadius
                             currentTemplate = currentPage?.template ?: PageTemplate.LINED
                             pdfBackgroundBitmap = state.currentPdfBitmap
                             setStrokes(state.currentPageStrokes)
@@ -786,6 +1036,8 @@ fun EditorScreen(
                         view.currentTool = state.selectedTool
                         view.currentColor = state.selectedColor
                         view.currentStrokeWidth = state.selectedStrokeWidth
+                        view.eraserMode = state.selectedEraserMode
+                        view.eraserRadius = state.selectedEraserRadius
                         if (currentPage != null && view.currentTemplate != currentPage.template) {
                             view.currentTemplate = currentPage.template
                         }
@@ -824,6 +1076,115 @@ fun EditorScreen(
                 canvasViewRef?.setStrokes(state.currentPageStrokes)
             }
         }
+    }
+
+    // Fit Screen / Zoom Button is inside Canvas overlay
+
+    // Cache Memory Manager Dialog
+    if (showCacheDialog) {
+        AlertDialog(
+            onDismissRequest = { showCacheDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Memory,
+                        contentDescription = null,
+                        tint = AccentIceBlue
+                    )
+                    Text(
+                        text = "Cache Memory Manager",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = DarkTextPrimary
+                        )
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "InkLite utilizes an in-memory bounded LRU cache for 0ms instantaneous page flipping, rapid vector redraws, and intelligent adjacent page prefetching without memory leaks.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DarkTextSecondary
+                    )
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = DarkSurfaceElevated,
+                        border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.5f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val stats = state.cacheStats
+                            CacheStatRow(
+                                label = "Bitmap RAM Used",
+                                value = stats?.formatBitmapSize() ?: "0.0 MB"
+                            )
+                            CacheStatRow(
+                                label = "Max Cache Budget",
+                                value = stats?.formatMaxBitmapSize() ?: "48.0 MB"
+                            )
+                            CacheStatRow(
+                                label = "Cached PDF Pages",
+                                value = "${stats?.bitmapCount ?: 0} pages in RAM"
+                            )
+                            CacheStatRow(
+                                label = "Cached Vector Pages",
+                                value = "${stats?.strokeCount ?: 0} pages in RAM"
+                            )
+                            CacheStatRow(
+                                label = "Cache Hit Rate",
+                                value = "${stats?.hitRatePercentage ?: 0}% (${stats?.hitCount ?: 0} hits)"
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Clearing cache memory frees allocated RAM immediately. Pages are loaded back dynamically when viewed.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = DarkTextSecondary.copy(alpha = 0.7f)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onClearCacheMemory()
+                        onRefreshCacheStats()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentCoral,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("clear_cache_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteSweep,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Clear Cache")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCacheDialog = false }) {
+                    Text("Close", color = DarkTextSecondary)
+                }
+            },
+            containerColor = DarkSurfaceContainer,
+            shape = RoundedCornerShape(18.dp)
+        )
     }
 
     // Color Dialog with curated Sophisticated Dark Palette
@@ -1175,6 +1536,331 @@ fun EditorScreen(
             }
         }
     }
+
+    // Flatten & Share Modal Bottom Sheet
+    if (showShareSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showShareSheet = false },
+            sheetState = sheetState,
+            containerColor = DarkSurfaceContainer,
+            dragHandle = {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 10.dp)
+                        .width(36.dp)
+                        .height(4.dp)
+                        .clip(CircleShape)
+                        .background(DarkBorder)
+                )
+            },
+            modifier = Modifier.testTag("flatten_share_sheet")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 6.dp)
+                    .padding(bottom = 36.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(AccentLavender.copy(alpha = 0.15f))
+                            .border(1.dp, AccentLavender.copy(alpha = 0.3f), RoundedCornerShape(12.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Share,
+                            contentDescription = null,
+                            tint = AccentLavender,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Flatten & Share",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = DarkTextPrimary
+                            )
+                        )
+                        Text(
+                            text = "Bake vector strokes into a PDF or PNG and share via Android",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = DarkTextSecondary
+                        )
+                    }
+                }
+
+                // Page Info Card
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = DarkSurfaceElevated,
+                    border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = notebook.title,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = DarkTextPrimary
+                                ),
+                                maxLines = 1
+                            )
+                            val strokeCount = canvasViewRef?.getStrokes()?.size ?: state.currentPageStrokes.size
+                            Text(
+                                text = "Page ${state.currentPageIndex + 1} of ${state.currentPages.size} • $strokeCount vector strokes",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = DarkTextSecondary
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = AccentIceBlue.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                text = "Ready to Flatten",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = AccentIceBlue
+                                ),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+
+                // 1. Flatten Page to PNG Image
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("share_png_option"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = DarkSurfaceElevated,
+                    border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Image,
+                                contentDescription = null,
+                                tint = AccentIceBlue,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Flatten Page to PNG Image",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = DarkTextPrimary
+                                    )
+                                )
+                                Text(
+                                    text = "High-resolution lossless rasterization (1200×1600)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = DarkTextSecondary
+                                )
+                            }
+                        }
+
+                        // Transparent Background Toggle
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Transparent Background",
+                                    style = MaterialTheme.typography.labelMedium.copy(color = DarkTextPrimary)
+                                )
+                                Text(
+                                    text = if (transparentPngExport) "Export strokes only" else "Include page template & dark background",
+                                    style = MaterialTheme.typography.labelSmall.copy(color = DarkTextSecondary)
+                                )
+                            }
+                            Switch(
+                                checked = transparentPngExport,
+                                onCheckedChange = { transparentPngExport = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = AccentIceBlue,
+                                    checkedTrackColor = AccentIceBlue.copy(alpha = 0.3f),
+                                    uncheckedThumbColor = DarkTextSecondary,
+                                    uncheckedTrackColor = DarkSurfaceContainer
+                                ),
+                                modifier = Modifier.testTag("transparent_png_switch")
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                showShareSheet = false
+                                val strokes = canvasViewRef?.getStrokes() ?: state.currentPageStrokes
+                                onExportPageAsImage(strokes, true, transparentPngExport)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("confirm_share_png_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AccentIceBlue,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Share Flattened PNG", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                // 2. Flatten Current Page to PDF
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("share_page_pdf_option"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = DarkSurfaceElevated,
+                    border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PictureAsPdf,
+                                contentDescription = null,
+                                tint = AccentCoral,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Flatten Current Page to PDF",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = DarkTextPrimary
+                                    )
+                                )
+                                Text(
+                                    text = "Single-page document with vector strokes and template",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = DarkTextSecondary
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                showShareSheet = false
+                                val strokes = canvasViewRef?.getStrokes() ?: state.currentPageStrokes
+                                onExportPageAsPdf(strokes)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("confirm_share_page_pdf_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AccentCoral,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Share Page PDF", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                // 3. Flatten Entire Notebook to PDF
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("share_notebook_pdf_option"),
+                    shape = RoundedCornerShape(14.dp),
+                    color = DarkSurfaceElevated,
+                    border = BorderStroke(1.dp, DarkBorder.copy(alpha = 0.5f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = null,
+                                tint = AccentLavender,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Flatten All Pages to PDF",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = DarkTextPrimary
+                                    )
+                                )
+                                Text(
+                                    text = "Multi-page document with all ${state.currentPages.size} pages flattened",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = DarkTextSecondary
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                showShareSheet = false
+                                val strokes = canvasViewRef?.getStrokes() ?: state.currentPageStrokes
+                                onExportNotebookAsPdf(strokes)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("confirm_share_notebook_pdf_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AccentLavender,
+                                contentColor = OnAccentLavender
+                            )
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Share Full Notebook PDF (${state.currentPages.size} pages)", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1253,5 +1939,17 @@ fun DarkColorSwatch(
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, color = DarkTextSecondary),
             maxLines = 1
         )
+    }
+}
+
+@Composable
+private fun CacheStatRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodySmall, color = DarkTextSecondary)
+        Text(text = value, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold, color = DarkTextPrimary))
     }
 }

@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -138,12 +139,19 @@ fun NotebookListScreen(
 
     LaunchedEffect(state.exportShareUri) {
         state.exportShareUri?.let { uri ->
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = state.exportShareMime ?: "application/pdf"
+            val mime = state.exportShareMime ?: "application/pdf"
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = mime
                 putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "InkLite Note")
+                clipData = ClipData.newUri(context.contentResolver, "InkLite Note", uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(intent, "Share Note PDF"))
+            val chooser = Intent.createChooser(sendIntent, "Share Note PDF").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(chooser)
             onClearShareUri()
         }
     }

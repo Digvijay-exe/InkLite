@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.data.cache.AppMemoryCache
 import com.example.data.db.InkLiteDatabaseHelper
 import com.example.data.export.ExportManager
 import com.example.data.io.StrokeBinarySerializer
@@ -13,6 +14,7 @@ import com.example.data.model.Notebook
 import com.example.data.model.NotebookPage
 import com.example.data.model.PageTemplate
 import com.example.data.pdf.PdfPageManager
+import com.example.ui.canvas.EraserMode
 import com.example.ui.canvas.InkTool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +35,9 @@ data class InkLiteUiState(
     val selectedTool: InkTool = InkTool.PEN,
     val selectedColor: Int = 0xFFD0BCFF.toInt(),
     val selectedStrokeWidth: Float = 5f,
+    val selectedEraserMode: EraserMode = EraserMode.STROKE,
+    val selectedEraserRadius: Float = 32f,
+    val cacheStats: AppMemoryCache.CacheStats? = null,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val isLoading: Boolean = false,
@@ -50,6 +55,15 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         loadNotebooks()
+        refreshCacheStats()
+    }
+
+    private fun loadPageStrokesCached(page: NotebookPage): List<InkStroke> {
+        val cached = AppMemoryCache.getStrokes(page.id)
+        if (cached != null) return cached
+        val loaded = StrokeBinarySerializer.loadStrokes(File(page.strokeFilePath))
+        AppMemoryCache.putStrokes(page.id, loaded)
+        return loaded
     }
 
     fun loadNotebooks() {
@@ -107,10 +121,15 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
             val pages = db.getPagesForNotebook(notebookId)
             if (notebook != null && pages.isNotEmpty()) {
                 val initialPage = pages[0]
-                val strokes = StrokeBinarySerializer.loadStrokes(File(initialPage.strokeFilePath))
+                val strokes = loadPageStrokesCached(initialPage)
                 val pdfBmp = if (initialPage.pdfPageIndex >= 0 && !notebook.pdfFilePath.isNullOrBlank()) {
                     PdfPageManager.getPageBitmap(getApplication(), notebook.pdfFilePath, initialPage.pdfPageIndex)
                 } else null
+
+                // Prefetch adjacent page in cache memory if available
+                if (!notebook.pdfFilePath.isNullOrBlank() && pages.size > 1) {
+                    PdfPageManager.prefetchAdjacentPages(getApplication(), notebook.pdfFilePath, 0, pages.size)
+                }
 
                 _uiState.update {
                     it.copy(
@@ -119,6 +138,7 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
                         currentPageIndex = 0,
                         currentPageStrokes = strokes,
                         currentPdfBitmap = pdfBmp,
+                        cacheStats = AppMemoryCache.getStats(),
                         isLoading = false,
                         canUndo = false,
                         canRedo = false
@@ -176,6 +196,8 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
         val idx = state.currentPageIndex
         if (idx in pages.indices) {
             val page = pages[idx]
+            // Fast in-memory cache update
+            AppMemoryCache.putStrokes(page.id, strokes)
             viewModelScope.launch(Dispatchers.IO) {
                 StrokeBinarySerializer.saveStrokes(File(page.strokeFilePath), strokes)
             }
@@ -191,16 +213,27 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
 
             viewModelScope.launch(Dispatchers.IO) {
                 val targetPage = pages[newIndex]
-                val strokes = StrokeBinarySerializer.loadStrokes(File(targetPage.strokeFilePath))
+                val strokes = loadPageStrokesCached(targetPage)
                 val pdfBmp = if (targetPage.pdfPageIndex >= 0 && !state.currentNotebook?.pdfFilePath.isNullOrBlank()) {
                     PdfPageManager.getPageBitmap(getApplication(), state.currentNotebook!!.pdfFilePath!!, targetPage.pdfPageIndex)
                 } else null
+
+                // Prefetch adjacent pages into memory cache for instant future transitions
+                if (!state.currentNotebook?.pdfFilePath.isNullOrBlank()) {
+                    PdfPageManager.prefetchAdjacentPages(
+                        getApplication(),
+                        state.currentNotebook!!.pdfFilePath!!,
+                        newIndex,
+                        pages.size
+                    )
+                }
 
                 _uiState.update {
                     it.copy(
                         currentPageIndex = newIndex,
                         currentPageStrokes = strokes,
                         currentPdfBitmap = pdfBmp,
+                        cacheStats = AppMemoryCache.getStats(),
                         canUndo = false,
                         canRedo = false
                     )
@@ -316,6 +349,30 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(selectedTool = tool) }
     }
 
+    fun setEraserMode(mode: EraserMode) {
+        _uiState.update { it.copy(selectedEraserMode = mode) }
+    }
+
+    fun setEraserRadius(radius: Float) {
+        _uiState.update { it.copy(selectedEraserRadius = radius) }
+    }
+
+    fun refreshCacheStats() {
+        val stats = AppMemoryCache.getStats()
+        _uiState.update { it.copy(cacheStats = stats) }
+    }
+
+    fun clearCacheMemory() {
+        AppMemoryCache.clearAll()
+        val stats = AppMemoryCache.getStats()
+        _uiState.update {
+            it.copy(
+                cacheStats = stats,
+                statusMessage = "Cache memory cleared successfully"
+            )
+        }
+    }
+
     fun setColor(color: Int) {
         _uiState.update { it.copy(selectedColor = color) }
     }
@@ -328,7 +385,11 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(canUndo = canUndo, canRedo = canRedo) }
     }
 
-    fun exportCurrentPageAsImage(currentStrokes: List<InkStroke>, isPng: Boolean) {
+    fun exportCurrentPageAsImage(
+        currentStrokes: List<InkStroke>,
+        isPng: Boolean,
+        transparentBackground: Boolean = false
+    ) {
         val state = _uiState.value
         val nb = state.currentNotebook ?: return
         val pages = state.currentPages
@@ -336,20 +397,23 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
         if (idx !in pages.indices) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isLoading = true) }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Flattening vector strokes to ${if (isPng) "PNG" else "JPEG"}...") }
             try {
                 val page = pages[idx]
                 val uri = ExportManager.exportPageAsImage(
-                    getApplication(),
-                    nb.title,
-                    page,
-                    currentStrokes,
-                    isPng
+                    context = getApplication(),
+                    notebookTitle = nb.title,
+                    page = page,
+                    pdfFilePath = nb.pdfFilePath,
+                    strokes = currentStrokes,
+                    isPng = isPng,
+                    transparentBackground = transparentBackground
                 )
                 val mime = if (isPng) "image/png" else "image/jpeg"
                 _uiState.update {
                     it.copy(
                         isLoading = false,
+                        statusMessage = null,
                         exportShareUri = uri,
                         exportShareMime = mime
                     )
@@ -369,19 +433,20 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
         if (idx !in pages.indices) return
 
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isLoading = true) }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Flattening vector strokes to PDF...") }
             try {
                 val page = pages[idx]
                 val uri = ExportManager.exportPageAsPdf(
-                    getApplication(),
-                    nb.title,
-                    page,
-                    nb.pdfFilePath,
-                    currentStrokes
+                    context = getApplication(),
+                    notebookTitle = nb.title,
+                    page = page,
+                    pdfFilePath = nb.pdfFilePath,
+                    strokes = currentStrokes
                 )
                 _uiState.update {
                     it.copy(
                         isLoading = false,
+                        statusMessage = null,
                         exportShareUri = uri,
                         exportShareMime = "application/pdf"
                     )
@@ -402,7 +467,7 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
         saveCurrentPageStrokes(currentStrokes)
 
         viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isLoading = true, statusMessage = "Generating full notebook PDF...") }
+            _uiState.update { it.copy(isLoading = true, statusMessage = "Flattening all pages to PDF...") }
             try {
                 val uri = ExportManager.exportNotebookAsPdf(
                     context = getApplication(),
@@ -412,7 +477,7 @@ class InkLiteViewModel(application: Application) : AndroidViewModel(application)
                         if (p.id == pages[state.currentPageIndex].id) {
                             currentStrokes
                         } else {
-                            StrokeBinarySerializer.loadStrokes(File(p.strokeFilePath))
+                            loadPageStrokesCached(p)
                         }
                     }
                 )
