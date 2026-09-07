@@ -1,0 +1,6 @@
+{
+  "name": "InkLite",
+  "description": "Lightweight vector note-taking and PDF markup app for fluid handwriting and PDF annotation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
