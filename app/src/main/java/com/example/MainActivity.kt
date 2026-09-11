@@ -129,6 +129,9 @@ fun InkLiteApp(viewModel: InkLiteViewModel) {
             },
             onClearShareUri = {
                 viewModel.clearShareUri()
+            },
+            onImportPdf = { uri, title ->
+                viewModel.importPdfNotebook(uri, title)
             }
         )
     } else {

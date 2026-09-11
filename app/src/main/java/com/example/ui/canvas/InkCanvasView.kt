@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PointF
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
@@ -169,6 +171,9 @@ class InkCanvasView @JvmOverloads constructor(
 
     private val visiblePageRect = RectF()
     private val pageBoundsRect = RectF(0f, 0f, PAGE_WIDTH, PAGE_HEIGHT)
+    private val pdfDestRect = RectF()
+    private val pdfRenderPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val highlighterXfermode = PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
@@ -722,7 +727,16 @@ class InkCanvasView @JvmOverloads constructor(
 
         // 3. Draw PDF or Procedural Template Background
         if (pdfBackgroundBitmap != null && !pdfBackgroundBitmap!!.isRecycled) {
-            canvas.drawBitmap(pdfBackgroundBitmap!!, null, pageBoundsRect, null)
+            val bmp = pdfBackgroundBitmap!!
+            val bmpW = bmp.width.toFloat()
+            val bmpH = bmp.height.toFloat()
+            val scale = minOf(PAGE_WIDTH / bmpW, PAGE_HEIGHT / bmpH)
+            val fitW = bmpW * scale
+            val fitH = bmpH * scale
+            val left = (PAGE_WIDTH - fitW) / 2f
+            val top = (PAGE_HEIGHT - fitH) / 2f
+            pdfDestRect.set(left, top, left + fitW, top + fitH)
+            canvas.drawBitmap(bmp, null, pdfDestRect, pdfRenderPaint)
         } else {
             drawProceduralTemplate(canvas)
         }
@@ -820,8 +834,11 @@ class InkCanvasView @JvmOverloads constructor(
 
             if (stroke.isHighlighter) {
                 val c = stroke.color
-                strokePaint.color = Color.argb(100, Color.red(c), Color.green(c), Color.blue(c))
+                strokePaint.color = Color.argb(120, Color.red(c), Color.green(c), Color.blue(c))
                 strokePaint.strokeWidth = (stroke.strokeWidth * 2.5f).coerceAtLeast(18f)
+                strokePaint.xfermode = highlighterXfermode
+            } else {
+                strokePaint.xfermode = null
             }
 
             if (points.size == 1) {
@@ -855,9 +872,11 @@ class InkCanvasView @JvmOverloads constructor(
         strokePaint.strokeWidth = w
         if (isHighlighter) {
             val c = currentColor
-            strokePaint.color = Color.argb(100, Color.red(c), Color.green(c), Color.blue(c))
+            strokePaint.color = Color.argb(120, Color.red(c), Color.green(c), Color.blue(c))
+            strokePaint.xfermode = highlighterXfermode
         } else {
             strokePaint.color = currentColor
+            strokePaint.xfermode = null
         }
 
         if (activePoints.size == 1) {
@@ -868,5 +887,6 @@ class InkCanvasView @JvmOverloads constructor(
         } else {
             canvas.drawPath(activePath, strokePaint)
         }
+        strokePaint.xfermode = null
     }
 }

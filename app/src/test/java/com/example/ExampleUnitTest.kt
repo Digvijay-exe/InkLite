@@ -155,4 +155,21 @@ class ExampleUnitTest {
     )
     assertTrue("Share intent should have ACTION_CHOOSER", shareIntent != null)
   }
+
+  @Test
+  fun testPdfMemoryCacheManagement() {
+    val bitmap = android.graphics.Bitmap.createBitmap(800, 1000, android.graphics.Bitmap.Config.ARGB_8888)
+    com.example.data.cache.AppMemoryCache.putBitmap("test_pdf_page_0_v2", bitmap)
+
+    val cached = com.example.data.cache.AppMemoryCache.getBitmap("test_pdf_page_0_v2")
+    assertTrue("Cached bitmap should be retrievable", cached != null)
+    assertEquals(800, cached!!.width)
+    assertEquals(1000, cached.height)
+
+    val stats = com.example.data.cache.AppMemoryCache.getStats()
+    assertTrue("Bitmap count in cache should be at least 1", stats.bitmapEntryCount >= 1)
+
+    com.example.data.cache.AppMemoryCache.clearAll()
+    assertTrue("Cache should be empty after clear", com.example.data.cache.AppMemoryCache.getBitmap("test_pdf_page_0_v2") == null)
+  }
 }

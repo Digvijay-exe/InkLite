@@ -65,7 +65,7 @@ object PdfPageManager {
     @Synchronized
     fun getPageBitmap(context: Context, pdfFilePath: String, pageIndex: Int): Bitmap? {
         if (pdfFilePath.isBlank() || pageIndex < 0) return null
-        val cacheKey = "${pdfFilePath.hashCode()}_$pageIndex"
+        val cacheKey = "${pdfFilePath.hashCode()}_${pageIndex}_v2"
 
         // 1. Fast Memory LRU Cache Hit (0ms)
         val memBitmap = AppMemoryCache.getBitmap(cacheKey)
@@ -105,13 +105,9 @@ object PdfPageManager {
                         val srcW = page.width
                         val srcH = page.height
 
-                        // Calculate scale to cap long edge at 1600px
-                        val maxSrc = maxOf(srcW, srcH)
-                        val scale = if (maxSrc > MAX_LONG_EDGE) {
-                            MAX_LONG_EDGE.toFloat() / maxSrc.toFloat()
-                        } else {
-                            1.0f
-                        }
+                        // Calculate scale to render high-DPI crisp pages (targeting 1600px long edge)
+                        val maxSrc = maxOf(srcW, srcH).toFloat()
+                        val scale = (MAX_LONG_EDGE.toFloat() / maxSrc).coerceIn(1.0f, 3.5f)
 
                         val targetW = (srcW * scale).toInt().coerceAtLeast(100)
                         val targetH = (srcH * scale).toInt().coerceAtLeast(100)
@@ -121,10 +117,10 @@ object PdfPageManager {
 
                         page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-                        // Save compressed JPEG to disk cache
+                        // Save compressed JPEG to disk cache (quality 90 for crisp text)
                         try {
                             FileOutputStream(diskCacheFile).use { out ->
-                                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                                bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to write disk cache for page $pageIndex", e)
@@ -154,7 +150,7 @@ object PdfPageManager {
         val targets = listOf(currentPageIndex - 1, currentPageIndex + 1)
             .filter { it in 0 until totalPages }
         for (idx in targets) {
-            val key = "${pdfFilePath.hashCode()}_$idx"
+            val key = "${pdfFilePath.hashCode()}_${idx}_v2"
             if (AppMemoryCache.getBitmap(key) == null) {
                 getPageBitmap(context, pdfFilePath, idx)
             }

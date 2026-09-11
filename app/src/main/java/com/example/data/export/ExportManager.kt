@@ -49,8 +49,16 @@ object ExportManager {
 
             // 2. Draw PDF background if available
             if (pdfBitmap != null && !pdfBitmap.isRecycled) {
-                val destRect = RectF(0f, 0f, width, height)
-                canvas.drawBitmap(pdfBitmap, null, destRect, null)
+                val bmpW = pdfBitmap.width.toFloat()
+                val bmpH = pdfBitmap.height.toFloat()
+                val scale = minOf(width / bmpW, height / bmpH)
+                val fitW = bmpW * scale
+                val fitH = bmpH * scale
+                val left = (width - fitW) / 2f
+                val top = (height - fitH) / 2f
+                val destRect = RectF(left, top, left + fitW, top + fitH)
+                val p = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+                canvas.drawBitmap(pdfBitmap, null, destRect, p)
             } else {
                 // 3. Draw procedural template (vector lines / grid / dots)
                 drawProceduralTemplate(canvas, width, height, template)

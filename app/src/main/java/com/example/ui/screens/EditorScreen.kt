@@ -157,7 +157,8 @@ fun EditorScreen(
     onRefreshCacheStats: () -> Unit = {},
     onClearCacheMemory: () -> Unit = {},
     onClearStatusMessage: () -> Unit = {},
-    onClearShareUri: () -> Unit
+    onClearShareUri: () -> Unit,
+    onImportPdf: (Uri, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var canvasViewRef by remember { mutableStateOf<InkCanvasView?>(null) }
@@ -174,6 +175,17 @@ fun EditorScreen(
     var showClearPageConfirm by remember { mutableStateOf(false) }
     var showCacheDialog by remember { mutableStateOf(false) }
     var pendingSaveTarget by remember { mutableStateOf<String?>(null) } // "notebook" or "page"
+
+    // PDF Import & Annotation Document Picker
+    val pdfPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val defaultTitle = uri.lastPathSegment?.substringAfterLast('/')
+                ?.substringBeforeLast(".pdf") ?: "Annotated PDF"
+            onImportPdf(uri, defaultTitle)
+        }
+    }
 
     // SAF Document Creator for saving PDF to custom user location
     val createDocumentLauncher = rememberLauncherForActivityResult(
@@ -231,18 +243,42 @@ fun EditorScreen(
             TopAppBar(
                 title = {
                     Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = notebook.title,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 18.sp,
+                                    color = DarkTextPrimary
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (notebook.isPdf) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = Color(0xFFDC2626).copy(alpha = 0.2f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = BorderStroke(0.5.dp, Color(0xFFDC2626).copy(alpha = 0.6f))
+                                ) {
+                                    Text(
+                                        text = "PDF",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFFFF897D)
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
                         Text(
-                            text = notebook.title,
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 18.sp,
-                                color = DarkTextPrimary
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = if (currentPage != null) "Page ${state.currentPageIndex + 1} of ${state.currentPages.size}" else "Editing",
+                            text = if (currentPage != null) {
+                                if (currentPage.pdfPageIndex >= 0) "PDF Page ${currentPage.pdfPageIndex + 1} of ${state.currentPages.size}"
+                                else "Page ${state.currentPageIndex + 1} of ${state.currentPages.size}"
+                            } else "Editing",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 12.sp,
                                 color = DarkTextSecondary
@@ -270,6 +306,21 @@ fun EditorScreen(
                     }
                 },
                 actions = {
+                    // Annotate PDF Document Button
+                    IconButton(
+                        onClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .testTag("editor_annotate_pdf_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PictureAsPdf,
+                            contentDescription = "Annotate PDF",
+                            tint = if (notebook.isPdf) Color(0xFFFF897D) else DarkTextSecondary
+                        )
+                    }
+
                     // Undo Button
                     IconButton(
                         onClick = { canvasViewRef?.undo() },
@@ -352,6 +403,22 @@ fun EditorScreen(
                             onDismissRequest = { showExportMenu = false },
                             modifier = Modifier.background(DarkSurfaceContainer)
                         ) {
+                            // PDF Annotation Action
+                            DropdownMenuItem(
+                                text = { Text("Open & Annotate PDF...", color = DarkTextPrimary, fontWeight = FontWeight.SemiBold) },
+                                leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = Color(0xFFFF897D)) },
+                                onClick = {
+                                    showExportMenu = false
+                                    pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                                },
+                                modifier = Modifier.testTag("editor_import_pdf_menu_item")
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                color = DarkBorder.copy(alpha = 0.4f)
+                            )
+
                             // 0. Flatten & Share Dialog
                             DropdownMenuItem(
                                 text = { Text("Flatten & Share (PDF / PNG)...", color = DarkTextPrimary, fontWeight = FontWeight.SemiBold) },

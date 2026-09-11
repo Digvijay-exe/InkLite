@@ -332,17 +332,39 @@ fun NotebookListScreen(
                                 )
                             )
                             Spacer(modifier = Modifier.height(20.dp))
-                            Button(
-                                onClick = { showNewNotebookDialog = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = AccentLavender,
-                                    contentColor = OnAccentLavender
-                                ),
-                                shape = RoundedCornerShape(12.dp)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Create First Notebook", fontWeight = FontWeight.SemiBold)
+                                Button(
+                                    onClick = { showNewNotebookDialog = true },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = AccentLavender,
+                                        contentColor = OnAccentLavender
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Add, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("New Notebook", fontWeight = FontWeight.SemiBold)
+                                }
+
+                                OutlinedButton(
+                                    onClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = DarkTextPrimary
+                                    ),
+                                    border = BorderStroke(1.dp, AccentLavender.copy(alpha = 0.5f)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("empty_state_import_pdf_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.UploadFile,
+                                        contentDescription = null,
+                                        tint = AccentLavender
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Annotate PDF", fontWeight = FontWeight.SemiBold)
+                                }
                             }
                         }
                     }
